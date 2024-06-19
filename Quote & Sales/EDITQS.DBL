@@ -1,0 +1,1402 @@
+.SUBROUTINE EDITQS
+; Quote and Sales editor.
+;
+; This program is responsible for additions, subtracts, and viewing of the quote
+; and sales files.  It is designed to rely heavily on cursor controled menus
+; and user friendly prompts.  It is built on a skeliton of RAWCON and FINCON,
+; but major differences do exist.
+;
+; This program is built as a subroutine to QSMENU.  This design helps to
+; modularize the programs for increased readability and menu usage.  It
+; can be transformed into a stand alone by deleteing the top line "SUBROUTINE"
+; and the final RETURN, located under the label OUT.  The variables declared
+; as COMMON must be redefined as RECORD.  EDITQS will not run well as a stand
+; alone as is.  It is dependent on XXXXXX for the customer name and three
+; character code used to identify all quotes and sales.
+;
+; The QSQUOTE and QSSALE files are managed by the softbol utility ISMUTL.  This
+; file structure keeps QSQUOTE and QSSALE operating as balanced tree files 
+; rather than linear files.  The .IS1 file looks like a normal .DDF file.  The
+; .ISM file is used by softbol to maintain the order of the file and a list of
+; all deleted records.  Deleted records are overwritten at the next available
+; time, rather than reorganizing the file at the time of deletion.  (This allows
+; recovery of lost records if needed)  Due to the nature of all quote and sales
+; files, use of the vi editor is discouraged.  Data can be changed, but records
+; can not be added or subtracted. (The file can be copied to a .DDF file, edited
+; and used as an input file by ISMUTL in recreating the original .IS1 file)
+;
+; The advantage to ISMUTL files is that they maintain the appearence of being
+; sorted at all times.  New records are added to the next available location
+; in the .IS1 file, but the .ISM file stores its location as if it were put
+; into its logical, sorted location.  When a read command is exicuted, the
+; program accually scans the .ISM file for the location of the desired record
+; and then the .IS1 file for the actual data.  The programmer never knows the
+; difference.
+;
+; Reading and writing are done by a key code rather than record numbers.  This
+; practice simplifies matters greatly for quotes and sales.  A read command will
+; yield the first record of a specified key field.  No mess of a binary search
+; is needed.  But remeber, it's the first one.  A reads (notice the S) will
+; give the next sequencial record of the same key field.  Thus scanning is as
+; easy as one read and many reads.   A write will replace the last read record.
+; Thus read a record, display it, and offer to edit.  The pointer is
+; automatically on the correct record.  A run time error is encountered if the
+; record read or written does not match the key field specified.  Thus if you
+; read the next "ABC" record and one did not exist, an onerror statement would
+; tell the program were to go.
+;
+; All quotes and sales are labeld by a three character code, CODE.  These codes
+; are stored in QSNAME and match a customer.  The three characters allows
+; easier, more constent identifications of customers.  The name is matched
+; in a different subroutine, and only the code is passed on to this program.
+; Without proper cross referencing through QSNAME, all data in QSQUOTE and
+; QSSALE is meaningless.  It can not be matched to a customer.
+; 
+; 9:43 Mon. June 25, 1990
+;
+COMMON ADDR1
+        AD1, a79    ;formated address
+        AD2, a79
+        AD3, a79
+        AD4, a79
+COMMON QSCODE
+        CODE, a3    ;three letter code
+RECORD QUOTE
+        QCODE, a3   ;three letter code
+        DATE, d8    ;date of quote
+        HPART, a15  ;Hubbard part number
+        CPART, a15  ;customer part number
+        QTY, 6a4    ;quantity quoted (alpha-num. coded) ie. 10M
+        PRICE, 6d6  ;prices for quoted quantities
+        DESCRP, a50 ;stray description
+        ENUM, A6    ;estimate number
+        PRCODE, a5  ;price code (ie. 7A89)
+RECORD SALE
+        SCODE, a3   ;three letter code
+        ORDN, d5    ;order number
+        SDTE, d8    ;date of sale
+        SQTY, d7    ;quantity sold
+        SPRCE, d6   ;price
+        SHPRT, a15  ;Hubbard part
+        SCPRT, a15  ;Customer part
+        PRCDE, a5   ;Price Code
+        PLAT, a3    ;Plating code
+RECORD LINE1
+        ,a12,'Estimate #: '
+        L11,a7
+        ,a27
+        ,a6,'Date: '
+        L12,a8
+RECORD LINE2
+        ,a12,'Our Part #: '
+        L21, a18
+        ,a8
+        ,a14,'Cust. Part #: '
+        L22, a15
+RECORD PRMPT1
+        ,a22,'Enter quantity number '
+        PR1, a1
+        ,a2,': '
+RECORD PRMPT2
+        ,a25,'Enter price for quantity '
+        PR2, a1
+        ,a2,': '
+RECORD QHEAD
+        ,a7,'Est.Num'
+        ,a4
+        ,a4,'Date'
+        ,a4
+        ,a8,'Our Part'
+        ,a12
+        ,a10,'Cust. Part'
+        ,a7
+        ,a19,'Partial Description'
+RECORD SLINE1
+        ,a14,'Order number: '
+        LS11, a5
+        ,a28
+        ,a6,'Date: '
+        LS12, a8
+RECORD SLINE2
+        ,a10,'Quantity: '
+        LS21, a9
+        ,a27
+        ,a7,'Price: '
+        LS22, a8
+        ,a7,'      ('
+        LS23, a5
+        ,a1,')'
+RECORD SHEAD
+        ,a5,'Ord.#' 
+        ,a4
+        ,a4,'Date'
+        ,a7
+        ,a6,'Quant.'
+        ,a5
+        ,a5,'Price'
+        ,a2
+        ,a8,'Our Part'
+        ,a12
+        ,a10,'Cust. Part'
+RECORD ENMM
+        ENM, a6
+RECORD DDTE
+        DTE, a8
+RECORD PRCEE
+        PRCE, a6
+RECORD QTYAA
+        QTYA, a4
+RECORD QTYAS
+        QTYS, a7
+RECORD QORDN
+        QOR, a5
+RECORD HPRT
+        HP, a18
+RECORD ANS
+        YN, A1
+RECORD MOV
+        MV, a1
+RECORD
+        val, d3
+        smax, d1
+        sel, d1
+        pos, d2
+        l, d3
+        m, d3
+        INDAT, d6
+RECORD OUTDAT
+        OD1, A2       ;date converter
+        ,a1, '/'
+        OD2, A2
+        ,a1, '/'
+        OD3, A2
+RECORD
+        CD1, A6       ;raw material code elements
+        CDA2, A4      ;selection 2 and 4 are decimals
+        CD3, A2       ;put into alpha-numerics to
+        CDA4, A3      ;help achieve constant format
+RECORD ,X
+        SHPART, A15   ;combination of part number elements
+RECORD
+        CD2, D4
+        CD4, D3
+RECORD IPART
+        PART, a18     ;both formatted and non formatted parts
+        PARTO, a18    ;formatted part XXXXXX-XXXX-XX-XXX
+RECORD
+        S, 5A15       ;choices for select
+        PL, a79
+        SREC, d3      ;sales psuedo record number
+        SARR, 5a79    ;sales array
+        QARR, 5a79    ;quote array
+        QREC, d3      ;psuedo record number
+RECORD
+        CB,a15        ;plating code
+        TOP, d3       ;viewing area limits
+        BOT, d3       ;for quotes
+        TOPS, D2      ;top of sales
+        BOTS, D2      ;bottom
+        OUTD2, d6     ;date converter
+        IND2, a8
+        EDLIN,d1
+        EDCELL,d1
+        PRTEMP,a8
+RECORD
+        SRQ,d1     ;search flags (0 if not found, 1 if found)
+        SRS,d1     ;sales search flag
+        CFL,d1     ;comment flag
+        ESC,d1     ;escape code
+        ERR,d1     ;error flag
+        ERRNUM,d3  ;disk error number
+        LIN,d4     ;line number of error
+	YK,a2,'20'
+;*******************
+;  Main program
+;*******************
+.PROC
+        open(8,o,'TT:')
+        open(7,i,'TT:')
+	xcall flags (1000,1)
+        open(2,U:I,'DBLDATA:QSQUOTE')
+        open(3,U:I,'DBLDATA:QSSALE')
+
+        call NEWSCR            ;template screen and address
+        SRQ=0                  ;zero out flags
+        SRS=0
+
+MAINM,  S(1) = '    Quotes'
+        S(2) = '    Sales'
+        S(3) = ' New Customer'
+        S(4) = '     Quit'
+        SMAX = 4
+        call SELECT
+        using SEL select
+          (1), goto QUOTE  ;view quotes
+          (2), goto SALE   ;view sales
+          (3), goto OUT    ;set new cust flag
+          (4), goto OUT1   ;return to QSM
+        endusing
+        goto DONE
+;*****************************
+; Display most recent quote.  Wait in menu
+QUOTE,  if (SRQ.eq.1) goto QMENU    ;already searched - screen full
+        call SRCHQ
+        if (SRQ.eq.2) goto BADQC    ;not found
+QMENU,  S(1) = '   Main Menu'
+        S(2) = ' Survey Quotes'
+        S(3) = '  Next Quote'
+        S(4) = '   Add Quote'
+        S(5) = '  Edit Quote'
+        SMAX = 5
+        call SELECT
+        using SEL select
+          (1), goto MAINM                ;Main menu
+          (2), if (SRQ.eq.1) goto SURQ   ;survey quotes
+          (3), if (SRQ.eq.1) goto NEXTQ  ;next quote
+          (4), goto ADDQ                 ;add quote
+          (5), if (SRQ.eq.1) goto EDTQ   ;edit quote
+        endusing
+        goto QMENU
+;*****************************
+; Bad key - no quotes found for three char. key
+BADQC,  
+	 offerror
+	 call CLCELL
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) then display(8,$SCR_POS(8,3),'Record locked by another user.')
+           else display(8,$SCR_POS(8,3),'No quotes for this customer have been registered.')
+        goto QMENU
+;*****************************
+; View next sequencial quote
+NEXTQ,  
+	 onerror NOMRQ         ;case end of file
+        reads(2,QUOTE,NOMRQ)   ;read sequencially
+      	 offerror
+ 
+	 if (QCODE.ne.CODE) goto NOMRQ  ;next does not match
+        call LDQT              ;display quote
+        goto QMENU
+NOMRQ,  
+	 offerror
+	 call CLCELL
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) 
+		then display(8,$SCR_POS(10,3),'Record locked by another user.')
+            	else display(8,$SCR_POS(10,3),'No more quotes for this customer.') 
+        display(8,$SCR_POS(12,3),'Press SPACE to return to first quote.')
+NOQ1,   
+	 display(8,$SCR_POS(12,40))
+        accept(7,MOV,DONE)
+        display(8,$SCR_POS(12,40), $SCR_CLR(eol))
+        xcall decml(MV,val)
+        if (val.ne.32) goto NOQ1	;if not a space
+        call SRCHQ             	;search for first quote
+        goto QMENU
+;*****************************
+; Add a quote to the file
+ADDQ,   call CLCELL
+        clear QUOTE            ;erase all previous data values
+        for EDLIN from 1 thru 7 begin
+            display(8,$SCR_POS(13,1), $SCR_CLR(eol))
+            display(8,$SCR_POS(14,1), $SCR_CLR(eol))
+            call ADMAST             ;get info
+            if (ENM.eq.' ') begin   ;aborted addition
+                call CLCELL
+                clear QUOTE
+                goto QMENU
+               end
+            call LDQT               ;load QUOTE, display
+           end
+        display(8,$SCR_POS(13,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(14,1), $SCR_CLR(eol))
+
+        QCODE=CODE             ;set three letter code for new quote
+
+        onerror ADQERR
+        store(2,QUOTE,CODE)    ;create new record on disk
+	 offerror
+
+        SRQ=1                  ;change search flag
+        read(2,QUOTE,CODE)     ;read what you just wrote - set pointers
+        goto QMENU
+ADQERR, 
+	 offerror
+	 call CLCELL
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) 
+	    	then display(8,$SCR_POS(8,3),'Record locked by another user.')
+           	else display(8,$SCR_POS(8,3),'Error writing new record to disk.')
+        goto DONE
+
+;*****************************
+; Entry prompts - goto governed by EDLIN
+ADMAST, goto(AENUM,DATE,HPART,CPART,PRICE,PRCD,DESC), EDLIN
+        return
+;*****************************
+; Edit quotes 
+EDTQ,   display(8,$SCR_POS(11,1),'Description:') ;move description line - make room for menu
+        display(8,$SCR_POS(11,14),DESCRP)
+EDTQ1,  
+	 offerror
+	 display(8,$SCR_POS(12,1),'1) Estimate #    3) Our Part    5) Prices       7) Price Code  0) No change')
+        display(8,$SCR_POS(13,1),'2) Date of Est.  4) Cust. Part  6) Description  8) Delete')
+        display(8,$SCR_POS(14,1),'Select (0-8):   ') 
+        display(8,$SCR_POS(14,15))
+        reads(7,ANS)
+
+        onerror EDTQ1
+        EDLIN=YN
+	 offerror
+
+        if ((EDLIN.lt.0).or.(EDLIN.gt.8)) goto EDTQ1
+        display(8,$SCR_POS(12,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(13,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(14,1), $SCR_CLR(eol))
+
+        if (EDLIN.eq.0) 
+		begin
+            	onerror EDBDWT
+            	write(2,QUOTE,CODE)           ;write to disk - replace old
+		offerror
+
+            	display(8,$SCR_POS(11,1), $SCR_CLR(eol))                ;move description line back
+            	display(8,$SCR_POS(12,1),'Description:')
+            	display(8,$SCR_POS(12,14),DESCRP)
+            	goto QMENU
+           	end
+
+        call EDMAST      ;get new data
+        if ((EDLIN.eq.8).and.(YN.eq.'Y')) goto QMENU   ;deleted record
+        call LDQT        ;load and print data
+        goto EDTQ        ;loop till 0 received
+
+;*****************************
+; Edit prompts governed by EDLIN
+EDMAST, goto(ENUM,DATE,HPART,CPART,PRCELL,DESC,PRCD,DELQTE), EDLIN
+        return
+;*****************************
+; Survey quotes - list all known in floating window
+SURQ,   call CLCELL
+        display(8,$SCR_POS(6,1),QHEAD)
+        QREC=1              ;arbitary record number (first of "ABC"'s)
+        top=1               ;set top of viewing window
+
+        onerror BADQC      ;incase end fo file
+        read(2,QUOTE,CODE)  ;read first
+	 offerror
+
+        call LDSHQ          ;load it into QARR
+SR3,    
+	 incr QREC           ;load up to first five quotes
+        if (QREC.gt.5) goto SR1
+        reads(2,QUOTE,SR1)  ;read sequencially
+        if (QCODE.ne.CODE) goto SR1  ;different code - different customer
+        call LDSHQ          ;load QARR
+        goto SR3
+SR1,    
+	 QREC=QREC-1         ;read one to many
+        bot=QREC            ;set bottom of viewing area (1 thru 5)
+        for l from top thru bot display(8,$SCR_POS(8+l-top,1),QARR(l+1-top)) ;display
+        call DISPLQ         ;cursor line movement
+        if (ESC.eq.1) begin ;escape code received
+            SRQ=0
+            goto QUOTE
+           end
+        read(2,QUOTE,CODE)  ;line selected.  Read first.  Read upto
+        for l from 2 thru QREC reads(2,QUOTE,SR2) ;arb. record number.
+        SRQ=1               ;set search flag.  Return with "fourth" "ABC" line.
+        call LDQT           ;load and display
+        goto QMENU
+SR2,    call CLCELL
+        display(8,$SCR_POS(8,3),'Fatal error in quote file.  End of file reached.')
+        reads(7,ANS)
+        goto DONE
+;*****************************
+; Load QARR with one line format quote
+LDSHQ,  PL=
+        if ((ENUM(1,1).eq.'C').or.(ENUM(1,1).eq.'E')) then begin
+           PL(1,1)=ENUM(1,1)
+           PL(2,2)='-'
+           PL(3,7)=ENUM(2,6)
+          end
+          else PL(2,7)=ENUM
+	INDAT(1,4)=DATE(1,4)
+	INDAT(5,6)=DATE(7,8)
+        ;INDAT=DATE
+        call CONVDT
+        PL(10,17)=OUTDAT
+        PART=HPART
+        call FPART        ;format hubbard part XXXXXX-XXXX-XX-XXX
+        PL(20,37)=PARTO
+        PL(40,54)=CPART
+        PL(57,79)=DESCRP
+        QARR(QREC+1-TOP)=PL
+        return
+;*****************************
+; find first record matching CODE.
+SRCHQ,  
+	 SRQ=1
+        onerror SQERR
+        read(2,QUOTE,CODE)
+	 offerror
+
+        if(CODE.ne.QCODE) goto SQERR
+        call LDQT
+        return
+SQERR,  
+	 offerror
+
+	 SRQ=2          ;not found - change flag
+        clear QUOTE
+        return
+
+;*****************************
+; Load and display multi line quote
+LDQT,   call CLCELL
+        L11=          ;print only filled variables
+        L12=
+        L21=
+        L22=
+        if ((ENUM(1,1).eq.'C').or.(ENUM(1,1).eq.'E')) then begin
+           L11=ENUM(1,1)
+           L11(2,2)='-'
+           L11(3,7)=ENUM(2,6)
+          end
+          else L11=ENUM
+        if (DATE.gt.0) begin
+	    INDAT(1,4)=DATE(1,4)
+	    INDAT(5,6)=DATE(7,8)
+            ;INDAT=DATE
+            call CONVDT
+            L12=OUTDAT
+           end
+        display(8,$SCR_POS(6,1),LINE1)
+        if (HPART.ne.' ') begin
+            PART=HPART
+            call FPART    ;format Hubbard part number
+            L21=PARTO
+           end
+        L22=CPART
+        display(8,$SCR_POS(7,1),LINE2)
+        display(8,$SCR_POS(9,1),'Quantity:')
+        display(8,$SCR_POS(10,1),'Price:')
+        for l from 1 thru 6 if (PRICE(l).eq.0) goto LD1
+LD1,    for m from 1 thru (l-1) begin
+            display(8,$SCR_POS(9,14+(m-1)*10),QTY(m))
+            PRTEMP=PRICE(m),'$$$$$.XX'
+            display(8,$SCR_POS(10,10+(m-1)*10),PRTEMP)
+          end 
+        if (PRCODE.ne.' ') begin
+            display(8,$SCR_POS(9,19+(m-2)*10),'(')
+            display(8,$SCR_POS(9,20+(m-2)*10),PRCODE)
+            display(8,$SCR_POS(9,25+(m-2)*10),')')
+           end
+        display(8,$SCR_POS(12,1),'Description:')
+        display(8,$SCR_POS(12,14),DESCRP)
+        return
+;*****************************
+; Add estimate number (New quote) - allows abort
+AENUM,  display(8,$SCR_POS(13,1),'Enter estimate number (ENTER to cancel):          ')
+        display(8,$SCR_POS(13,42))
+        reads(7,ENMM)
+        if (ENM.eq.' ') return
+        for l from 1 thru 6 if (ENM(l,l).eq.'-') goto AENERR
+        ENUM=ENM
+        return
+AENERR, display(8,$SCR_POS(14,1),'Do not enter estimate number with a dash.  Ex: E12345')
+        goto AENUM
+;*****************************
+; Edit estimate number
+ENUM,   display(8,$SCR_POS(13,1),'Enter estimate number:          ')
+        display(8,$SCR_POS(13,24))
+        reads(7,ENMM)
+        for l from 1 thru 6 if (ENM(l,l).eq.'-') goto ENERR
+        ENUM=ENM
+        return
+ENERR,  display(8,$SCR_POS(14,1),'Do not enter estimate number with a dash.  Ex: E12345')
+        goto ENUM
+;*****************************
+DATE,   display(8,$SCR_POS(13,1),'Enter date of estimate:           ')
+        display(8,$SCR_POS(13,25))
+        reads(7,DDTE)
+
+        onerror DAERR
+        IND2=DTE
+	 offerror
+
+        call CONVD2
+        if (OUTD2.eq.0) goto DAERR
+
+	 DATE(1,4)=OUTD2(1,4)
+	 DATE(5,6)=YK
+	 DATE(7,8)=OUTD2(5,6)
+        	;DATE=OUTD2
+        return
+DAERR,  
+	 offerror
+	 display(8,$SCR_POS(14,1),'Use XX/XX/XX, X/XX/XX, X/X/XX, or XX/X/XX formats only.')
+        goto DATE
+
+;*****************************
+HPART,  display(8,$SCR_POS(13,1),'Enter our part number:                     ')
+        display(8,$SCR_POS(13,24))
+        reads(7,HPRT)
+        CFL=1
+        PART=HP
+        call PARSE
+        if (ERR.eq.1) goto HPART
+        HPART=SHPART
+        return 
+;*****************************
+CPART,  display(8,$SCR_POS(13,1),'Enter the customer part number: ')
+        reads(7,CPART)
+        return
+
+;*****************************
+; Edit prices - edit any of six cells
+PRCELL, 
+	 display(8,$SCR_POS(13,1),'Which price do you wish to change? (1-6, A=All):   ')
+        display(8,$SCR_POS(13,50))
+        reads(7,ANS)
+        if (YN.eq.'A') goto PRICE
+
+        onerror PRCERR
+        EDCELL=YN
+	 offerror
+
+        if ((EDCELL.ge.1).and.(EDCELL.le.6)) goto PRDIV
+PRCERR, 
+	 offerror
+	 display(8,$SCR_POS(14,1),'Use only a number 1 thru 6 or the letter A.')
+        goto PRCELL
+
+;*****************************
+; add prices - fill all six until one returned empty
+PRICE,  EDCELL=0
+        display(8,$SCR_POS(9,12), $SCR_CLR(eol))
+        display(8,$SCR_POS(10,12), $SCR_CLR(eol))
+        do begin
+           incr EDCELL
+           call PRDIV
+          end
+        until ((QTY(EDCELL).eq.' ').or.(EDCELL.ge.6))
+        return
+;*****************************
+; prompt for prices
+PRDIV,  display(8,$SCR_POS(13,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(14,1), $SCR_CLR(eol))
+        PR1=EDCELL,'X'
+        display(8,$SCR_POS(13,1),PRMPT1)
+        reads(7,QTYA)
+        if (QTYA.eq.' ') return
+        QTY(EDCELL)=QTYA
+        display(8,$SCR_POS(9,14+(EDCELL-1)*10),QTY(EDCELL))
+PR1,    
+	 display(8,$SCR_POS(13,1), $SCR_CLR(eol))
+        PR2=EDCELL,'X'
+        display(8,$SCR_POS(13,1),PRMPT2)
+        reads(7,PRCE)
+
+        onerror PRERR
+        PRICE(EDCELL)=PRCE
+	 offerror
+
+        PRTEMP=PRICE(EDCELL),'$$$$$.XX'
+        display(8,$SCR_POS(10,10+(EDCELL-1)*10),PRTEMP)
+        return 
+PRERR,  
+	 offerror
+	 display(8,$SCR_POS(14,1),'Use up to six digit number only.  No commas or decimals.')
+        goto PR1
+
+;*****************************
+DESC,   display(8,$SCR_POS(13,1),'Description: ')
+        reads(7,DESCRP)
+        return
+
+;*****************************
+PRCD,   display(8,$SCR_POS(13,1),'Price code: ')
+        reads(7,PRCODE)
+        return
+;*****************************
+; delete a quote
+DELQTE, display(8,$SCR_POS(14,1),'Do you wish to delete this record? (Y or N)   ')
+        display(8,$SCR_POS(14,45))
+        reads(7,ANS)
+        if (YN.eq.'N') return
+        if (YN.ne.'Y') goto DELQTE
+        onerror DQERR
+        delete (2,CODE)
+	 offerror
+
+        return
+DQERR,  
+	 offerror
+	 call CLCELL
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) 
+		then display(8,$SCR_POS(9,3),'Record locked by another user.  Record not deleted.')
+           	else display(8,$SCR_POS(9,3),'An error has occured.  Record not deleted.')
+        return
+
+;*****************************
+; Clear quote window
+CLCELL, 
+	 display(8,$SCR_POS(6,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(7,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(8,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(9,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(10,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(11,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(12,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(13,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(14,1), $SCR_CLR(eol))
+        return
+;*****************************
+; Display sale.  Wait in menu
+SALE,   if (SRS.eq.1) goto SMENU    ;already searched - screen full
+        call SRCHS                  ;search for first sale
+        if (SRS.eq.2) goto BADSL    ;not found
+SMENU,  S(1) = '   Main Menu'
+        S(2) = ' Survey Sales'
+        S(3) = '   Next Sale'
+        S(4) = '    Add Sale'
+        S(5) = '   Edit Sale'
+        SMAX = 5
+        call SELECT
+        using SEL select
+          (1), goto MAINM                ;main menu
+          (2), if (SRS.eq.1) goto SURS   ;survey sales
+          (3), if (SRS.eq.1) goto NEXTS  ;next sale
+          (4), goto ADDS                 ;add sale
+          (5), if (SRS.eq.1) goto EDTS   ;edit sale
+        endusing
+        goto SMENU
+
+;*****************************
+; Key fields did not match on search
+BADSL,  
+	 offerror
+	 call CLLOW
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) 
+		then display(8,$SCR_POS(18,3),'Record locked by another user.')
+           	else display(8,$SCR_POS(18,3),'No sales have been registered for this customer.')
+        goto SMENU
+
+;*****************************
+; read and display next sequential sale
+NEXTS,  
+	 onerror NOMRS                 ;incase end of file
+        reads(3,SALE,NOMRS)            ;read sequential
+	 offerror
+
+        if (SCODE.ne.CODE) goto NOMRS  ;case do not match
+        call LDSL      ;load and display
+        goto SMENU
+NOMRS,  
+	 offerror
+	 call CLLOW
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) 
+		then display(8,$SCR_POS(18,3),'Record locked by another user.')
+           	else display(8,$SCR_POS(18,3),'No more sales for this customer')
+        display(8,$SCR_POS(20,3),'Press SPACE to return to first sale.')
+NOS1,   
+	 display(8,$SCR_POS(20,40))
+        accept(7,MOV,DONE)
+        display(8,$SCR_POS(20,40), $SCR_CLR(eol))
+        xcall decml(MV,val)
+        if (val.ne.32) goto NOS1	; if not a space
+        call SRCHS     		; search for and display first sale
+        goto SMENU
+;*****************************
+; Add sale.  Fill SALE and write to disk.
+ADDS,   call CLLOW      ;clear window
+        clear SALE      ;clear varaible of old values
+        for EDLIN from 1 thru 8 begin
+            display(8,$SCR_POS(21,1), $SCR_CLR(eol))
+            display(8,$SCR_POS(22,1), $SCR_CLR(eol))
+            call ADMSSL            ;prompt for new data
+            if (ORDN.eq.0) begin   ;aborted addition
+                call CLLOW
+                clear SALE
+                goto SMENU
+               end
+            call LDSL              ;load and display
+           end
+        display(8,$SCR_POS(21,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(22,1), $SCR_CLR(eol))
+        SCODE=CODE            ;set three letter code for new sale
+
+        onerror ADSERR
+        store(3,SALE,CODE)    ;write new record to disk
+	 offerror
+
+        SRS=1                 ;change search flag
+        read(3,SALE,CODE)     ;read what you just wrote - set pointers
+        goto SMENU
+ADSERR, 
+	 offerror
+	 call CLLOW
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) 
+		then display(8,$SCR_POS(18,3),'Record locked by another user.')
+           	else display(8,$SCR_POS(18,3),'Error writing new record to disk.')
+        goto DONE
+
+;*****************************
+; Adding of sale - prompts governed by EDLIN
+ADMSSL, goto(AORDN,SDTE,SQTY,SPRCE,PRCDE,SHPRT,PLAT,SCPRT), EDLIN
+        return
+;*****************************
+; Edit sales menu
+EDTS,   
+	 offerror
+
+	 display(8,$SCR_POS(24,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(21,1),'1) Order number  3) Quantity  5) Our Part #  7) Cust. Part #  9) Delete sale')
+        display(8,$SCR_POS(22,1),'2) Date of sale  4) Price     6) Plating     8) Price code    0) No change')
+        display(8,$SCR_POS(23,1),'Select (0-9):   ')
+        display(8,$SCR_POS(23,15))
+        reads(7,ANS)
+
+        onerror EDTS
+        EDLIN=YN
+	 offerror
+
+        display(8,$SCR_POS(21,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(22,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(23,1), $SCR_CLR(eol))
+        if (EDLIN.eq.0) 
+		begin    		;no change
+            	onerror EDBDWT
+            	write(3,SALE,CODE)   ;update old record
+		offerror
+            	goto SMENU
+           	end
+
+        call EDMSSL              ;get new data
+        if ((EDLIN.eq.9).and.(YN.eq.'Y')) goto SMENU   ;deleted record
+        call LDSL                ;load and display
+        goto EDTS
+
+;*****************************
+; Edit prompts - governed by EDLIN
+EDMSSL, goto(ORDN,SDTE,SQTY,SPRCE,SHPRT,PLAT,SCPRT,PRCDE,DELSAL), EDLIN
+        return
+
+;*****************************
+; Survey sales - print quick view of all
+SURS,   
+	 call CLLOW
+        display(8,$SCR_POS(16,1),SHEAD)
+        SREC=1                ;arbitrary record number
+        tops=1                ;top of viewing window
+
+        onerror BADSL
+        read(3,SALE,CODE)     ;read first record
+	 offerror
+
+        call LDSHS            ;load SARR with one line desc
+SRS3,   
+	 incr SREC             ;load up to first five
+        if (SREC.gt.5) goto SRS1
+        reads(3,SALE,SRS1)
+        if (SCODE.ne.CODE) goto SRS1
+        call LDSHS
+        goto SRS3
+SRS1,   
+	 SREC=SREC-1           ;read one too many
+        bots=SREC
+        for l from tops thru bots display(8,$SCR_POS(18+l-tops,1),SARR(l+1-tops))
+        call DISPLS
+        if (ESC.eq.1) 
+		begin   ;escape code received
+            	SRS=0
+            	goto SALE
+            	end
+        read(3,SALE,CODE)     ;selected a record - scan out to
+        for l from 2 thru SREC reads(3,SALE,SRS2)  ;read this record
+        SRS=1                 ;set search flag
+        call LDSL             ;display it
+        goto SMENU
+SRS2,   
+	 call CLLOW
+        display(8,$SCR_POS(18,3),'Fatal error in sales file.')
+        reads(7,ANS)
+        goto DONE
+
+;*****************************
+; Search for first record with key field of CODE
+SRCHS,  
+	 SRS=1
+        onerror SSERR      ;end of file
+        read(3,SALE,CODE)   ;read first matching record
+	 offerror
+
+        if(CODE.ne.SCODE) goto SSERR  ;no match
+        call LDSL           ;load and display
+        return
+SSERR,  
+	 offerror
+
+	 SRS=2               ;not found
+        clear SALE
+        return
+
+;*****************************
+; Add new sale - allow abort with order number of zero
+AORDN,  
+	 display(8,$SCR_POS(21,1),'Enter order number (ENTER to cancel):       ')
+        display(8,$SCR_POS(21,39))
+        reads(7,QORDN)
+
+        onerror AORERR
+        ORDN=QOR
+	 offerror
+
+        return
+AORERR, 
+	 offerror
+	 display(8,$SCR_POS(22,1),'Use five digit number only.')
+        goto AORDN
+
+;*****************************
+; Edit order number
+ORDN,   display(8,$SCR_POS(21,1),'Enter order number:       ')
+        display(8,$SCR_POS(21,21))
+        reads(7,QORDN)
+
+        onerror ORERR
+        ORDN=QOR
+	 offerror
+
+        return
+ORERR,  
+	 offerror
+	 display(8,$SCR_POS(22,1),'Use five digit number only.')
+        goto ORDN
+
+;*****************************
+SDTE,   display(8,$SCR_POS(21,1),'Enter date of sale:           ')
+        display(8,$SCR_POS(21,21))
+        reads(7,DDTE)
+
+        onerror SDERR
+        IND2=DTE
+	 offerror
+
+        call CONVD2
+        if (OUTD2.eq.0) goto SDERR
+	SDTE(1,4)=OUTD2(1,4)
+	SDTE(5,6)=YK
+	SDTE(7,8)=OUTD2(5,6)
+        ;SDTE=OUTD2
+        return
+
+SDERR,  
+	 offerror
+	 display(8,$SCR_POS(22,1),'Use XX/XX/XX, X/XX/XX, X/X/XX, or XX/X/XX formats only.')
+        goto SDTE
+
+;*****************************
+SQTY,   
+	 display(8,$SCR_POS(21,1),'Enter the quantity of sale:        ')
+        display(8,$SCR_POS(21,29))
+        reads(7,QTYAS)
+
+        onerror SQTERR
+        SQTY=QTYS
+	 offerror
+
+        return
+SQTERR, 
+	 offerror
+	 display(8,$SCR_POS(22,1),'Use up to seven digit number.  No decimal or comma.')
+        goto SQTY
+
+;*****************************
+SPRCE,  
+	 display(8,$SCR_POS(21,1),'Enter the price of sale:          ')
+        display(8,$SCR_POS(21,26))
+        reads(7,PRCEE)
+        onerror SPRERR
+        SPRCE=PRCE
+	 offerror
+
+        return
+SPRERR, 
+	 offerror
+	 display(8,$SCR_POS(22,1),'Use up to six digit number.  No decimal or comma.')
+        goto SQTY
+
+;*****************************
+SHPRT,  display(8,$SCR_POS(21,1),'Enter our part number:                     ')
+        display(8,$SCR_POS(21,24))
+        reads(7,HPRT)
+        CFL=0
+        PART=HP
+        call PARSE
+        if (ERR.eq.1) goto SHPRT
+        SHPRT=SHPART
+        return 
+;*****************************
+SCPRT,  display(8,$SCR_POS(21,1),'Enter the customer part number: ')
+	display(8,$SCR_POS(21,33))
+        reads(7,SCPRT)
+        return
+;*****************************
+PRCDE,  display(8,$SCR_POS(21,1),'Enter price code: ')
+	display(8,$SCR_POS(21,19))
+        reads(7,PRCDE)
+        return
+;*****************************
+PLAT,   display(8,$SCR_POS(21,1),'Enter plating code:       ')
+        display(8,$SCR_POS(21,22))
+        reads(7,PLAT)
+        return
+;*****************************
+; Delete sales record
+DELSAL, display(8,$SCR_POS(14,1),'Do you wish to delete this record? (Y or N)   ')
+        display(8,$SCR_POS(14,45))
+        reads(7,ANS)
+        if (YN.eq.'N') return
+        if (YN.ne.'Y') goto DELSAL
+
+        onerror DSERR
+        delete (3,CODE)
+	 offerror
+
+        return
+DSERR,  
+	 offerror
+	 call CLLOW
+        display(8,$SCR_POS(18,3),'An error has occured.  Record not deleted.')
+        return
+;*****************************
+; display multiline sales data.  Print only if data field filled
+LDSL,   call CLLOW
+        LS11=
+        LS12=
+        LS21=
+        LS22=
+        LS23=
+        if (ORDN.gt.0) LS11=ORDN,'XXXXX'
+	INDAT(1,4)=SDTE(1,4)
+	INDAT(5,6)=SDTE(7,8)
+        ;INDAT=SDTE
+        call CONVDT
+        if (SDTE.gt.0) LS12=OUTDAT
+        display(8,$SCR_POS(16,1),SLINE1)
+        if (SQTY.gt.0) LS21=SQTY,'Z,ZZZ,ZZX'
+        if (SPRCE.gt.0) LS22=SPRCE,'$$$$$.XX'
+        if (PRCDE.ne.' ') LS23=PRCDE
+        display(8,$SCR_POS(17,1),SLINE2)
+        using PLAT select
+          ('   ','PF'), CB='Plain Finish'
+          ('C  '), CB='Cadmium Finish'
+          ('C15'), CB='Cadmium .00015"'
+          ('C2'),  CB='Cadmium .0002"'
+          ('C3'),  CB='Cadmium .0003"'
+          ('C35'), CB='Cadmium .00035"'
+          ('C5'),  CB='Cadmium .0005"'
+          ('Z  '), CB='Zinc Finish'
+          ('Z15'), CB='Zinc .00015"'
+          ('Z2'),  CB='Zinc .0002"'
+          ('Z3'),  CB='Zinc .0003"'
+          ('Z35'), CB='Zinc .00035"'
+          ('Z5'),  CB='Zinc .0005"'
+          ('P','DP'), CB='Parkerized'
+          ('BO'),  CB='Black Oxide'
+          ('ET'),  CB='Electro-Tin'
+          ('N'),   CB='Nickel Plate'
+          ('RV'),  CB='Rust Veto'
+          (), CB=PLAT
+        endusing
+        if (SHPRT.ne.' ') begin
+            PART=SHPRT
+            call FPART
+            display(8,$SCR_POS(19,1),'Our Part:')
+            display(8,$SCR_POS(19,11),PARTO)
+            display(8,$SCR_POS(19,10+l),', ')
+            display(8,$SCR_POS(19,12+l),CB)
+           end
+        if (SCPRT.ne.' ') begin
+            display(8,$SCR_POS(19,50),'Cust. Part:')
+            display(8,$SCR_POS(19,62),SCPRT)
+           end
+        return 
+;*****************************
+; load SARR with one line format sale
+LDSHS,  PL=
+        PL(1,5)=ORDN,'XXXXX'
+	INDAT(1,4)=SDTE(1,4)
+	INDAT(5,6)=SDTE(7,8)
+        ;INDAT=SDTE
+        call CONVDT
+        PL(8,15)=OUTDAT
+        PL(18,26)=SQTY,'Z,ZZZ,ZZX'
+        PL(29,36)=SPRCE,'$$$$$.XX'
+        PART=SHPRT
+        call FPART
+        PL(39,56)=PARTO
+        PL(59,73)=SCPRT
+        SARR(SREC+1-TOPS)=PL
+        return
+;*****************************
+; Clear sales window
+CLLOW,  display(8,$SCR_POS(16,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(17,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(18,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(19,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(20,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(21,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(22,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(23,1), $SCR_CLR(eol))
+        return
+;************************************
+; Display quotes in one line format.
+DISPLQ, QREC=1
+        call HGHLQ
+        display(8,$SCR_POS(24,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(24,1),'Use up and down arrows to move, ENTER to select, SPACE to return to menu.')
+ACCQT,  
+	 display(8,$SCR_POS(24,78))
+;;;     accept(7,MOV,DONE)   ;accept single character
+;;;     xcall decml (MV,val) ;ascii value
+
+        accept(7,val,DONE)   ;accept single character
+	 if (val.eq.0)accept(7,val,DONE)   ;accept single character
+
+        display(8,$SCR_POS(24,78), $SCR_CLR(eol))      ;clear printed character
+
+        using val select
+          (72), goto UPQ     ;move according to key pressed
+          (80), goto DOWNQ
+          (13), goto ENTQ	; cr
+          (32), goto SPACEQ	; space
+        endusing             ;move until receive a CR
+        goto ACCQT
+ENTQ,   
+	 accept(7,MOV,DONE)   ;line feed with CR
+        display(8,$SCR_POS(8+QREC-TOP,1),QARR(QREC+1-TOP)) ;remove highlighted last selection
+        display(8,$SCR_POS(24,1), $SCR_CLR(eol))                        ;clear directions line
+        ESC=0
+        RETURN
+SPACEQ, 
+	 display(8,$SCR_POS(24,1), $SCR_CLR(eol))   ;,2)       ;escape code
+        ESC=1
+        RETURN
+
+UPQ,    display(8,$SCR_POS(8+QREC-TOP,1),QARR(QREC+1-TOP))
+        if (QREC.gt.TOP) 
+		then QREC=QREC-1  ;adjust line selected
+            	else QREC=TOP
+        call HGHLQ
+        goto ACCQT
+DOWNQ,  
+	 display(8,$SCR_POS(8+QREC-TOP,1),QARR(QREC+1-TOP))
+        if (QREC.lt.BOT) 
+		then incr QREC    ;adjust line selected
+
+           	else begin
+             	onerror DNQ1                 ;if move down past bottom line of
+             	reads(2,QUOTE,DNQ1)           ;window, read next record - scroll 
+		offerror
+
+             	if (QCODE.eq.CODE)      ;detect match - load into QARR
+		  	begin
+                 	for M from top thru (bot-1) QARR(m+1-top)=QARR(m+2-top)
+                 	incr QREC
+                 	incr BOT
+                 	if (BOT.gt.5) 
+				then TOP=BOT-4
+                     		else TOP=1
+                 	call LDSHQ
+                 	for M from bot thru top by -1 display(8,$SCR_POS(8+m-top,1),QARR(M+1-top))
+               	end
+           	end
+DNQ1,   
+	 offerror
+	 call HGHLQ
+        goto ACCQT
+HGHLQ,  
+	 display(8,$SCR_ATT(reverse))  ;screen(1,1,3)        ;reverse video on
+        display(8,$SCR_POS(8+QREC-TOP,1),QARR(QREC+1-TOP))
+        display(8,$SCR_ATT(clear))  ;screen(1,1,4)        ;reverse video off
+        RETURN
+
+;************************************
+; Show and move Sales in one line format.
+DISPLS, SREC=1
+        call HGHLSL
+        display(8,$SCR_POS(24,1), $SCR_CLR(eol))
+        display(8,$SCR_POS(24,1),'Use up and down arrows to move, ENTER to select, SPACE to return to menu.')
+ACCSL,  	
+	 display(8,$SCR_POS(24,78))
+;;      accept(7,MOV,DONE)   ;accept single character
+;;;     xcall decml (MV,val) ;ascii value
+
+        accept(7,val,DONE)   ;accept single character
+        if (val.eq.0)accept(7,val,DONE)   ;accept single character
+        display(8,$SCR_POS(24,78), $SCR_CLR(eol))      ;clear printed character
+
+        using val select
+          (72), goto UPS     ;move according to key pressed
+          (80), goto DOWNS
+          (13), goto ENTS
+          (32), goto SPACES
+        endusing             ;move until receive a CR
+
+        goto ACCSL
+ENTS,   
+	 accept(7,MOV,DONE)   ;line feed with CR
+        display(8,$SCR_POS(18+SREC-TOPS,1),SARR(SREC+1-TOPS)) ;remove highlighted selection
+        display(8,$SCR_POS(24,1), $SCR_CLR(eol))                    ;clear directions line
+        ESC=0
+        RETURN
+SPACES, display(8,$SCR_POS(24,1), $SCR_CLR(eol))
+        ESC=1
+        RETURN
+
+UPS,    
+	 display(8,$SCR_POS(18+SREC-TOPS,1),SARR(SREC+1-TOPS))
+        if (SREC.gt.TOPS) 
+		then SREC=SREC-1  ;adjust line selected
+            	else SREC=TOPS
+        call HGHLSL
+        goto ACCSL
+DOWNS,  
+	 display(8,$SCR_POS(18+SREC-TOPS,1),SARR(SREC+1-TOPS))
+        if (SREC.lt.BOTS) 
+		then incr SREC    ;adjust line selected
+
+           	else begin
+             	onerror DNS1                  ;read new record to scroll down
+             	reads(3,SALE,DNS1)             ;detect end of file or mismatch
+		offerror
+
+             	if (SCODE.eq.CODE) 
+			begin
+                 	for M from tops thru (bots-1) SARR(m+1-tops)=SARR(m+2-tops)
+                 	incr SREC
+                 	incr BOTS
+                 	if (BOTS.gt.5) 
+				then TOPS=BOTS-4
+                     		else TOPS=1
+                 	call LDSHS
+              		for M from bots thru tops by -1 display(8,$SCR_POS(18+m-tops,1),SARR(M+1-tops))
+               	end
+           	end
+DNS1,   
+	 offerror
+	 call HGHLSL
+        goto ACCSL
+HGHLSL, 
+	 display(8,$SCR_ATT(reverse))  ;screen(1,1,3)        ;reverse video on
+        display(8,$SCR_POS(18+SREC-TOPS,1),SARR(SREC+1-TOPS))
+        display(8,$SCR_ATT(clear))  ;screen(1,1,4)        ;reverse video off
+        RETURN
+
+;************************************
+;  Bottom line menu.  S() loaded with options.  SEL returned as selection #
+SELECT, 
+	 display(8,$SCR_POS(24,1), $SCR_CLR(eol))
+        for L from 1 thru SMAX begin
+           pos = ((L-1)*16)+2         ;print choices on screen
+           display(8,$SCR_POS(24,pos),S(l))
+          end
+        SEL = 1      ;high light starting choice
+        call HGHLS
+ACCSEL, 
+	 display(8,$SCR_POS(24,78))
+;;;     accept(7,MOV,DONE)   ;accept single character
+;;;     xcall decml (MV,val) ;ascii value
+
+	 accept (7, val, done)
+	 if (val.eq.0)accept (7,val,done)
+        display(8,$SCR_POS(24,78), $SCR_CLR(eol))      ;clear printed character
+
+        using val select
+          (75), call LFTS    ;move according to key pressed
+          (77), call RGHTS
+        endusing             ;move until receive a CR
+
+        if (val.ne.13) goto ACCSEL
+        accept(7,MOV,DONE)   ;line feed with CR
+        RETURN
+LFTS,   
+	 call TXTS
+        SEL = SEL - 1
+        if (SEL.lt.1) SEL = SMAX
+        call HGHLS
+        RETURN
+RGHTS,  call TXTS
+        SEL = SEL + 1
+        if (SEL.gt.SMAX) SEL = 1
+        call HGHLS
+        RETURN
+HGHLS,  display(8,$SCR_ATT(reverse))  ;screen(1,1,3)          ;reverse video on
+        call TXTS              ;print text
+        display(8,$SCR_ATT(clear))  ;screen(1,1,4)          ;reverse video off
+        RETURN
+TXTS,   pos = ((SEL-1)*16)+2   ;calc location
+        display(8,$SCR_POS(24,pos),S(SEL))  ;print text
+        RETURN
+
+;**********************************
+;  Basic new screen.  Templete for rest of displays.
+NEWSCR, display(8,$SCR_POS(1,1), $SCR_CLR(eos))   ;clear screen
+        display(8,$SCR_POS(1,1),AD1)
+        display(8,$SCR_POS(2,1),AD2) ;print top lines of address
+        display(8,$SCR_POS(3,1),AD3)
+        display(8,$SCR_POS(4,1),AD4)
+        display(8,$SCR_POS(5,1),'..............................................................................')
+        display(8,$SCR_POS(15,1),'..............................................................................')
+        RETURN
+;*******************************
+;  convert date from d6 to formated a8
+CONVDT, od1 = indat(1,2), 'ZX'
+        od2 = indat(3,4), 'XX'
+        od3 = indat(5,6), 'XX'
+        RETURN
+;*******************************
+;  convert date from a8 to formated d6
+CONVD2, outd2 = 0
+        if (ind2(2,2).eq.'/') begin
+            outd2(1,2) = ind2(1,1)
+            if (ind2(4,4).eq.'/') begin
+                outd2(3,4) = ind2(3,3)
+                outd2(5,6) = ind2(5,6)
+               end
+            if (ind2(5,5).eq.'/') begin
+                outd2(3,4) = ind2(3,4)
+                outd2(5,6) = ind2(6,7)
+              end
+           end
+        if (ind2(3,3).eq.'/') begin
+            outd2(1,2) = ind2(1,2)
+            if (ind2(5,5).eq.'/') begin
+                outd2(3,4) = ind2(4,4)
+                outd2(5,6) = ind2(6,7)
+               end
+            if (ind2(6,6).eq.'/') begin
+                outd2(3,4) = ind2(4,5)
+                outd2(5,6) = ind2(7,8)
+               end
+           end
+        RETURN 
+;***********************
+; Format hubbard part number: PART from an a15 to PARTO, an a18 with dashs
+FPART,  parto = '               '
+        if (part.eq.' ') return
+        for l from 1 thru 6 if (part(l,l).eq.' ') goto for1
+for1,   parto(1,l) = part(1,l)      ;stops at first space, therefore
+        parto(l,l) = '-'            ;l one to big after for loop
+        l=l+1
+        for m from 7 thru 10 if (part(m,m).ne.' ') goto for2
+for2,   parto(l,l+(11-m)) = part(m,10)
+        l=l+(11-m)
+        parto(l,l) = '-'
+        l=l+1
+        parto(l,l) = part(11,11)
+        l=l+1
+        if (part(12,12).ne.' ') begin
+           parto(l,l) = part(12,12)
+           l=l+1
+          end
+        parto(l,l) = '-'
+        l=l+1
+        for m from 13 thru 15
+          if ((part(m,m).ne.' ').and.(part(m,m).ne.'0')) goto for3
+for3,   parto(l,l+(15-m)) = part(m,15)
+        l=l+1+(15-m)
+        return       
+
+;***********************
+; Load user entered part number into usable form - take out dashes
+PARSE,  
+	 ERR=0        ;error flag
+        clear SHPART
+        if (PART.eq.' ') return
+
+        onerror PARERR
+        for L from 2 thru 7 if(PART(L,L).eq.'-') goto P1
+        goto PARERR
+P1,     
+	 CD1 = PART(1,L-1)     ;skip '-' char.
+        incr L
+        for M from (L+1) thru (L+4) if(PART(M,M).eq.'-') goto P2
+        goto PARERR
+P2,     
+	 onerror P2A
+        CD2 = PART(L,M-1)
+        CDA2 = CD2, 'ZZZX'
+        goto P2B
+P2A,    
+	 offerror
+	 CDA2= PART(L,M-1)
+P2B,    
+	 onerror PARERR
+        incr M
+        for L from (M+1) thru (M+2) if(PART(L,L).eq.'-') goto P3
+        goto PARERR
+P3,     
+	 CD3 = PART(M,L-1)
+        incr L
+        if (L.eq.16) 
+		begin
+            	CD4 = PART(16,18)   ;Part full length - no room for ending space
+		offerror
+            	RETURN
+           	end
+
+        for M from (L+1) thru (L+3) if(PART(M,M).eq.' ') goto P4
+        goto PARERR
+P4,     
+	 CD4 = PART(L,M-1)
+        CDA4 = CD4, 'XXX'
+	 offerror
+
+        RETURN
+
+PARERR, 
+	 offerror
+	 ERR = 1      ;set error flag
+        if (CFL.eq.1) 
+		then display(8,$SCR_POS(14,1),'Bad part number format.  Re-enter as XXXXXX-XXXX-XX-XXX.')
+            	else display(8,$SCR_POS(22,1),'Bad part number format.  Re-enter as XXXXXX-XXXX-XX-XXX.')
+        RETURN
+
+;***********************
+; return to QSMENU
+OUT1,   CODE=
+OUT,    close 2
+        close 3
+        close 7
+        close 8
+        return
+;***********************
+EDBDWT, 
+	 offerror
+	 display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(5,1),'Error writing to disk after editing.  Check that codes match.')
+        display(8,$SCR_POS(6,1),'Write will produce error if not replacing last record READ')
+        display(8,$SCR_POS(7,1),'(not store or delete)')
+
+        xcall ERROR (ERRNUM,LIN)
+        if (ERRNUM.eq.40) display(8,$SCR_POS(9,1),'Record locked by another user.')
+
+        display(8,$SCR_POS(12,1),'Sale:')
+        display(8,$SCR_POS(13,1),SALE)
+        display(8,$SCR_POS(15,1),'Quote:')
+        display(8,$SCR_POS(16,1),QUOTE)
+        display(8,$SCR_POS(18,1),'Cocde:')
+        display(8,$SCR_POS(18,6),CODE)
+DONE,   
+	 close 2
+        close 3
+        close 7
+        close 8
+.END

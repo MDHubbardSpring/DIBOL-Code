@@ -1,0 +1,701 @@
+.SUBROUTINE NMATCH
+; Name match.
+;
+; This program is responsible for matching user entries with known company
+; names and addresses.  It offers searching and matching options to help
+; compensate for misspellings, change of address, change of names.  This
+; routine will return a formatted address and a three letter code if a
+; match was achieved.
+;
+; This program also handles all additions and editing to the name list.
+; This is the only part of quote and sales to access the name file, so editing
+; here is only logical.  The rest of quote and sales are dependent on the
+; three character customer "number" rather than the customer name.  This
+; practice has three major advantages: 1) names need only be matched here - more
+; elaborate searching can be used.  2) a change of name or address is recorded
+; in QSNAME, but does not affect QSSALE or QSQUOTE.  3) only three characters
+; need be stored to identify each record. 
+;
+; 6/21/90 4:39 PM
+;
+COMMON ADDR1
+        AD1, a79     ;formatted address
+        AD2, a79
+        AD3, a79
+        AD4, a79
+COMMON QSCODE
+        CODE, a3     ;three letter company code
+RECORD QSNAME
+        STATE, a2    ;state
+        CITY, a20    ;city
+        CNME, a36    ;customer name
+        ADDR, a36    ;address
+        ZIP, d5      ;zip code
+        PHNE1, d10   ;phone number 1
+        PHNE2, d10   ;phone number 2
+        FAX, d10     ;fax number
+        CNTCT, a17   ;contact/salesperson's name
+        CRED, d1     ;credit rating (1=OA,2=COD,3=CWD,4=TBA,9=Old address)
+        QSC, a3      ;three letter code
+RECORD ,X
+        QKY, a22     ;22 character key - used to search file
+        ,a72
+        ,d15
+        ,d10
+        ,d10
+        ,a17
+        ,a4
+RECORD LAST          ;used for change of address
+        ,a94
+        ,d15
+        ,d10
+        ,d10
+        ,a17
+        ADCD,d1
+        ,a3
+RECORD MSTCDE        ;code generator
+        D1, d2
+        D2, d2
+        D3, d2
+        ARR, 53a1
+RECORD NAME
+        NME, a36
+RECORD CYSTE
+        CYST, a23
+RECORD CCITY
+        CCTY, a20
+RECORD SSTATE
+        SSTE, a2
+RECORD ADDRSS
+        ADDRS, a36
+RECORD CCRED
+        CCRD, a1
+RECORD KEY
+        KY, a22
+RECORD ANS
+        YN, a1
+RECORD SEL
+        SL, a2
+RECORD PHOUT
+        ,a1,'('
+        PH1,a3
+        ,a2,') '
+        PH2,a3
+        ,a3,' - '
+        PH3,a4
+RECORD CREDIT
+        CRD, a23
+RECORD
+        FND, d1
+        NEWKEY,d1
+        CRNG, d2      ;city search range - number of characters to match
+        NRNG, d2      ;name search range
+        l, d2
+        m, d2
+        ZIPC, a5
+        PHONE,d10
+        val, d3
+        ERRNUM,d3
+        ELINE,d4
+;*****************
+;  Main program
+;*****************
+.PROC
+        open(8,o,'TT:')
+        open(7,i,'TT:')
+	xcall flags (1000,1)
+        open(3,U:I,'DBLDATA:QSNAME')
+GETKEY, display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(2,24),'Quote and Sales')
+        display(8,$SCR_POS(3,24),'Company Locator')
+        display(8,$SCR_POS(8,3),'Company Name (ENTER to exit): ') 
+        reads(7,NAME)
+        if (NME.eq.' ') goto OUT1
+GT1,    display(8,$SCR_POS(10,3),'City, State:                        ')
+        display(8,$SCR_POS(10,16))
+        reads(7,CYSTE)
+        call DYSECT
+        if (SSTE.eq.'!!') begin
+            display(8,$SCR_POS(14,3),'Please use under twenty character city name, two letter state code.')
+            display(8,$SCR_POS(15,3),'Example:  Oxford, MI')
+            goto GT1
+          end
+        if (SSTE.eq.' ') begin
+            display(8,$SCR_POS(11,3),'State: ')
+            reads(7,SSTATE)
+          end
+        KY=
+        KY(1,2)=SSTE   ;load search key
+        KY(3,22)=CCTY
+        CRNG=20   ;match 20 characters of the city
+        NRNG=5    ;and 5 of company name
+
+SRMAST, call SRCHNM     ;find first match
+        if (FND.eq.1) goto OUT    ;react to search results
+        if (FND.eq.2) goto EDIT
+        if (FND.eq.4) goto GETKEY
+        if (FND.eq.5) begin
+             NRNG=0     ;list all in town
+             CRNG=5     ;match only first five of town
+             goto SRMAST
+           end
+        if (FND.eq.6) goto OUT1
+        if (FND.eq.7) goto ADD
+        display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+        call KEYDSP        ;display record if found
+        if (FND.eq.8) goto LOCKED
+        display(8,$SCR_ATT(reverse))  ;screen(1,1,3)
+        display(8,$SCR_POS(10,3),' No Match was found ')
+        display(8,$SCR_ATT(clear))  ;screen(1,1,4)
+        display(8,$SCR_POS(12,3),'Do you wish to:')
+        display(8,$SCR_POS(14,8),'B) Broaden search for same company')
+        display(8,$SCR_POS(15,8),'C) Change company data')
+        display(8,$SCR_POS(16,8),'L) List all entries in town')
+        display(8,$SCR_POS(17,8),'A) Add company to records')
+        display(8,$SCR_POS(18,8),'N) New search')
+        display(8,$SCR_POS(19,8),'Q) Quit')
+BR1,    display(8,$SCR_POS(21,3),'Select:     ') 
+        display(8,$SCR_POS(21,11))
+        reads(7,ANS)
+        using YN select
+          ('B'), begin
+                   NRNG=2  ;match two of name
+                   CRNG=5  ;and 5 of city
+                   goto SRMAST
+                 end
+          ('C'), goto EDTKEY
+          ('L'), begin
+                   NRNG=0  ;match none of name
+                   CRNG=5  ;five of city
+                   goto SRMAST
+                 end
+          ('A'), goto ADD 
+          ('N'), goto GETKEY 
+          ('Q'), goto OUT1
+        endusing 
+        goto BR1
+;*********************
+LOCKED, display(8,$SCR_ATT(reverse))  ;screen(1,1,3)   ;highlight error message
+        display(8,$SCR_POS(10,3),' Record locked by another user ')
+        display(8,$SCR_ATT(clear))  ;screen(1,1,4)
+        display(8,$SCR_POS(12,3),'Do you wish to:')
+        display(8,$SCR_POS(14,8),'S) Search again, same company')
+        display(8,$SCR_POS(15,8),'N) New search')
+        display(8,$SCR_POS(16,8),'Q) Quit')
+LK1,    display(8,$SCR_POS(18,3),'Select:     ') 
+        display(8,$SCR_POS(18,11))
+        reads(7,ANS)
+        using YN select
+          ('S'), goto SRMAST
+          ('N'), goto GETKEY 
+          ('Q'), goto OUT1
+        endusing 
+        goto LK1
+;*********************
+; Search QSNAME for matching record
+SRCHNM, 
+	 onerror NOTFND
+        read(3,QSNAME,KY(1,2+CRNG))     ;find first match
+	 offerror
+SR1,    
+	 if (QKY(1,CRNG).ne.KY(1,CRNG)) goto NOTFND
+        if (NRNG.eq.0) goto SR2         ;matching only city
+        if (CNME(1,NRNG).ne.NAME(1,NRNG)) 
+		begin  ;match city, state, and name
+            	reads(3,QSNAME,NOTFND)      ;find sequential matches
+            	goto SR1
+           	end
+SR2,    
+	 call CONFRM       ;confirm address matches intent
+        if (FND.ge.1) return
+        reads(3,QSNAME,NOTFND) 
+        goto SR1
+NOTFND, 
+	 offerror
+
+	 xcall ERROR (ERRNUM,ELINE)
+        if (ERRNUM.eq.40) 
+		then FND=8
+           	else FND=0
+
+        return
+
+;*********************
+; Confirm address found is what user wants
+CONFRM, call DISPLY 
+        display(8,$SCR_POS(12,3),'Do you wish to:')
+        display(8,$SCR_POS(14,5),'ENTER) Accept this company')
+        display(8,$SCR_POS(15,9),'S) Seach further')
+        display(8,$SCR_POS(16,9),'B) Broaden search')
+        display(8,$SCR_POS(17,9),'L) List all entries in town')
+        display(8,$SCR_POS(18,9),'N) New search')
+        display(8,$SCR_POS(19,9),'A) Add new company')
+        display(8,$SCR_POS(20,9),'E) Edit record')
+        display(8,$SCR_POS(21,9),'Q) Quit')
+CN1,    display(8,$SCR_POS(23,3),'Selection:    ')
+        display(8,$SCR_POS(23,14))
+        reads(7,ANS)
+        using YN select
+          (' '), FND=1
+          ('S'), FND=0
+          ('B'), FND=3
+          ('L'), FND=5
+          ('N'), FND=4
+          ('A'), FND=7
+          ('E'), begin
+                   FND=2
+                   KY=QKY
+                 end
+          ('Q'), FND=6
+          (), goto CN1
+        endusing
+        return
+;*********************
+; Print address.  Load ADDR1
+DISPLY, display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+DSPLY,  AD1=
+        AD2=
+        AD3=
+        AD4=
+        AD1=CNME
+        AD2=ADDR
+        display(8,$SCR_POS(2,5),CNME)
+        display(8,$SCR_POS(3,5),ADDR)
+        display(8,$SCR_POS(2,40),'Contact:')
+        display(8,$SCR_POS(2,49),CNTCT)
+        AD1(37,53)=CNTCT
+        l=21
+        do l=l-1 until ((CITY(l,l).ne.' ').or.(l.lt.4))
+        AD3=CITY(1,l)
+        AD3(l+1,l+2)=', '
+        AD3(l+3,l+4)=STATE
+        display(8,$SCR_POS(4,5),AD3(1,30))
+        if (ZIP.gt.0) then AD4(l+4,l+8)=ZIP,'XXXXX'
+            else AD4=
+        display(8,$SCR_POS(5,5),AD4(1,30))
+        if (PHNE1(1,3).gt.0) then PH1=PHNE1(1,3),'XXX'
+            else PH1=
+        if (PHNE1(4,6).gt.0) begin      ;take out ( ) if no area code
+              PH2=PHNE1(4,6),'XXX'      ;print only if has number
+              PH3=PHNE1(7,10),'XXXX'
+              display(8,$SCR_POS(4,40),'Phone 1:')
+              display(8,$SCR_POS(4,49),PHOUT)
+              AD1(59,61)='P1:'
+              AD1(62,78)=PHOUT
+            end
+        if (PHNE2(1,3).gt.0) then PH1=PHNE2(1,3),'XXX'
+            else PH1=
+        if (PHNE2(4,6).gt.0) begin
+              PH2=PHNE2(4,6),'XXX'
+              PH3=PHNE2(7,10),'XXXX'
+              display(8,$SCR_POS(5,40),'Phone 2:')
+              display(8,$SCR_POS(5,49),PHOUT)
+              AD2(59,61)='P2:'
+              AD2(62,78)=PHOUT
+            end
+        if (FAX(1,3).gt.0) then PH1=FAX(1,3),'XXX'
+            else PH1=
+        if (FAX(4,6).gt.0) begin
+              PH2=FAX(4,6),'XXX'
+              PH3=FAX(7,10),'XXXX'
+              display(8,$SCR_POS(6,44),'Fax:')
+              display(8,$SCR_POS(6,49),PHOUT)
+              AD3(59,61)='FX:'
+              AD3(62,78)=PHOUT
+            end
+        using CRED select
+          (1), CRD='OA - Open Account'
+          (2), CRD='COD - Cash on delivery'
+          (3), CRD='CWO - Cash with order'
+          (4), CRD='TBA - To be arranged'
+          (9), CRD='Old address'
+        endusing
+        if (CRED.ne.0) display(8,$SCR_POS(8,5),CREDIT)
+        AD4(31,57)=CRD
+        display(8,$SCR_POS(10,1),'..............................................................................')
+        RETURN
+;*********************
+; Edit search key
+EDTKEY, display(8,$SCR_POS(10,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,3),'Do you wish to change:')
+        display(8,$SCR_POS(14,8),'CN) Company Name')
+        display(8,$SCR_POS(15,8),'CI) City')
+        display(8,$SCR_POS(16,8),'ST) State')
+        display(8,$SCR_POS(17,9),'S) Search')
+        display(8,$SCR_POS(18,9),'N) New search')
+        display(8,$SCR_POS(20,3),'Select:    ')
+        display(8,$SCR_POS(20,11))
+        reads(7,SEL)
+        using SL select
+          ('CN'), call CNME
+          ('CI'), call CITY
+          ('ST'), call STATE
+          ('S'), begin
+                   KY=
+                   KY(1,2)=SSTE
+                   KY(3,22)=CCTY
+                   CRNG=20
+                   NRNG=5
+                   goto SRMAST
+                 end
+          ('N'), goto GETKEY
+        endusing
+        call KEYDSP
+        goto EDTKEY
+;*********************
+; Display search key in address format
+KEYDSP, display(8,$SCR_POS(2,5),NAME)
+        l=21
+        do l=l-1 until ((CCTY(l,l).ne.' ').or.(l.lt.4))
+        display(8,$SCR_POS(4,5),CCTY(1,l))
+        display(8,$SCR_POS(4,l+5),', ')
+        display(8,$SCR_POS(4,l+7),SSTE)
+        display(8,$SCR_POS(10,1),'..............................................................................')
+        return
+;*********************
+; Start of address editing
+EDIT,   NEWKEY=0
+        LAST=QSNAME    ;save old address
+        call EDFUL
+        if (SL.eq.'A') goto GETKEY   ;abort edit
+;*********************
+; Update old record
+UPDATE, if (NEWKEY.eq.1) goto NEWKEY
+        write(3,QSNAME,KY)  ;overwrite
+        goto OUT
+;*********************
+; New city or state - new search key
+NEWKEY, ADCD=9              ;flag as old address
+        write(3,LAST,KY)    ;overwrite old address
+        KY=
+        KY(1,2)=STATE       ;create new search key
+        KY(3,22)=CITY
+        store(3,QSNAME,KY)  ;write new record for new address
+        NEWKEY=0
+        goto OUT
+;*********************
+; Allow editing of any address cell
+EDFUL,  display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,3),'Choose edit field or task:')
+        display(8,$SCR_POS(13,8),'CN) Company Name')
+        display(8,$SCR_POS(14,8),'AD) Address')
+        display(8,$SCR_POS(15,8),'CI) City')
+        display(8,$SCR_POS(16,8),'ST) State')
+        display(8,$SCR_POS(17,8),'ZC) Zip code')
+        display(8,$SCR_POS(18,8),'CO Contact')
+        display(8,$SCR_POS(19,8),'PN) Phone numbers')
+        display(8,$SCR_POS(20,8),'AS) Account status')
+        display(8,$SCR_POS(21,9),'U) Update record')
+        display(8,$SCR_POS(22,9),'A) Abort - do not save changes')
+ED1,    display(8,$SCR_POS(24,3),'Select:    ')
+        display(8,$SCR_POS(24,11))
+        reads(7,SL)
+        using SL select
+          ('CN'), call CNME
+          ('AD'), call ADDR
+          ('CI'), call CITY
+          ('ST'), call STATE
+          ('ZC'), call ZIP
+          ('CO'), call CNTCT
+          ('PN'), call SELPH
+          ('AS'), call CRED
+          ('U'), RETURN
+          ('A'), RETURN
+          (), goto ED1
+        endusing
+        call DISPLY     ;display new data
+        goto EDFUL
+;*********************
+; Add a new address to file
+ADD,    clear QSNAME
+        display(8,$SCR_POS(10,3),'Adding record to file')
+        CNME=NAME
+        CITY=CCTY       ;already known form search key
+        STATE=SSTE
+        call ADDR       ;ask
+        call DSPLY      ;display
+        call ZIP        ;zip code
+        call DSPLY
+        call CNTCT      ;contact
+        call DSPLY
+        call ADDP1      ;phone 1
+        call DSPLY
+        call ADDP2      ;phone 2
+        call DSPLY
+        call ADDFX      ;fax number
+        call DSPLY
+        call CRED       ;credit
+        call DISPLY
+AD1,    display(8,$SCR_POS(12,5),'Is this correct? (Y or N)   ')
+        display(8,$SCR_POS(12,31))
+        reads(7,ANS)
+        if (YN.eq.'Y') goto AD2
+        if (YN.ne.'N') goto AD1
+        call EDFUL
+        if (SL.eq.'A') goto GETKEY
+AD2,    call CODE
+        store(3,QSNAME,KY)  ;write new record
+        goto OUT
+;*********************
+; Calculate next three letter code
+CODE,   
+	open(2,u,'DBLDATA:MSTCDE')  ;last code used and element characters
+        read(2,MSTCDE,1)       ;are stored in MSTCDE.  Codes are a base 53
+        incr D1                ;number coded in fifty three characters.  Next
+        if (D1.gt.53) begin    ;code is just the progesion in base 53.  D1, D2,
+            D1=1               ;D3 are decimals (1-53) that represent the
+            incr D2            ;number.  Characters are used to shorten storage
+            if (D2.gt.53) begin  ;space and to alphabetize in B-tree format.
+                D2=1
+                incr D3
+                if (D3.gt.53) begin
+                    display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+                    writes(8,'Customer codes maxed out.  Repent for the hour judgement is at hand.')
+                    goto DONE
+                   end
+              end
+          end
+        write(2,MSTCDE,1)
+        close 2
+        QSC(1,1)=ARR(D1)    ;calculate new D1, D2, D3 - now put into char.
+        QSC(2,2)=ARR(D2)
+        QSC(3,3)=ARR(D3)
+        return
+;*********************
+; Edit and add
+CNME,   display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,5),'Company Name: ') 
+        reads(7,NAME)
+        CNME=NME
+        return
+;*********************
+; enter city or city, state
+CITY,   display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+CT1,    display(8,$SCR_POS(12,3),'City, State:                        ')
+        display(8,$SCR_POS(12,16))
+        reads(7,CYSTE)
+        call DYSECT
+        if (SSTE.eq.'!!') begin
+            display(8,$SCR_POS(15,3),'Please use under twenty character city name, two letter state code.')
+            display(8,$SCR_POS(16,3),'Example:  Oxford, MI')
+            goto CT1
+          end
+        if (CITY.ne.CCTY) begin
+            CITY=CCTY
+            NEWKEY=1
+           end
+        if ((SSTE.ne.'  ').and.(SSTE.ne.STATE)) begin
+            STATE=SSTE
+            NEWKEY=1
+           end
+        if (SSTE.eq.'  ') SSTE=STATE
+        return
+;*********************
+STATE,  display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,5),'State: ')
+        reads(7,SSTATE)
+        if ((SSTE.ne.'  ').and.(SSTE.ne.STATE)) begin
+            STATE=SSTE    ;really a change
+            NEWKEY=1
+           end
+        return
+;*********************
+ADDR,   display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,5),'Address: ')
+        reads(7,ADDRSS)
+        ADDR=ADDRS
+        return
+;*********************
+ZIP,    display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+ZP1,    
+	 display(8,$SCR_POS(12,5),'Zip Code:       ')
+        display(8,$SCR_POS(12,15))
+        reads(7,ZIPC)
+
+	 onerror ZIPERR
+        ZIP=ZIPC
+	 offerror
+
+        return
+ZIPERR, 
+	 offerror
+
+	 display(8,$SCR_POS(14,5),'Use five digit number only.')
+        goto ZP1
+
+;*********************
+CNTCT,  display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,5),'Contact person: ') 
+        reads(7,CNTCT)
+        return
+;*********************
+SELPH,  display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,5),'Which number do you wish to change:')
+        display(8,$SCR_POS(14,10),'1) Phone number 1')
+        display(8,$SCR_POS(15,10),'2) Phone number 2')
+        display(8,$SCR_POS(16,10),'F) Fax number')
+        display(8,$SCR_POS(17,10),'N) No change')
+SL1,    display(8,$SCR_POS(19,5),'Select:   ')
+        display(8,$SCR_POS(19,13))
+        reads(7,ANS)
+        using YN select
+          ('1'), call ADDP1
+          ('2'), call ADDP2
+          ('F'), call ADDFX
+          ('N'), return
+          (), goto SL1
+        endusing
+        call DISPLY
+        goto SELPH
+;*********************
+; different prompts
+ADDP1,  display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,3),'Phone number 1: ')
+        call PHONE
+        PHNE1=PHONE
+        return
+ADDP2,  display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,3),'Phone number 2: ')
+        call PHONE
+        PHNE2=PHONE
+        return
+ADDFX,  display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,7),'Fax number: ')
+        call PHONE
+        FAX=PHONE
+        return
+;*********************
+; Enter phone number in (XXX) XXX - XXXX format, no ENTER
+PHONE,  
+	 offerror
+
+	 display(8,$SCR_POS(15,8),'SPACE to correct, ENTER to abandon.')
+        PH1=
+        PH2=
+        PH3=
+        display(8,$SCR_POS(12,19),PHOUT)
+        for l from 1 thru 3 
+		begin
+PH1,      
+		offerror
+		display(8,$SCR_POS(12,19+l),' ')        ;area code
+          	display(8,$SCR_POS(12,19+l),0)
+          	accept(7,ANS,DONE)
+
+          	onerror PH1
+          	xcall decml(ANS,val)
+          	if (val.eq.32) goto PHONE
+          	if (val.eq.13) 
+			begin
+              		accept(7,ANS,DONE)
+              		PHONE=0
+			offerror
+              		return
+             		end
+
+          	if ((YN.lt.'0').or.(YN.gt.'9')) goto PH1
+          	PHONE(l,l)=YN
+          	PH1(l,l)=YN
+          	display(8,$SCR_POS(12,19),PHOUT)
+		offerror
+         	end
+
+        for l from 1 thru 3 
+		begin
+PH2,      
+		offerror
+		display(8,$SCR_POS(12,24+l),' ')      ;exchange
+          	display(8,$SCR_POS(12,24+l),0)
+          	accept(7,ANS,DONE)
+
+          	onerror PH2
+          	xcall decml(ANS,val)
+          	if (val.eq.32) goto PHONE
+          	if (val.eq.13) 
+			begin
+              		accept(7,ANS,DONE)
+              		PHONE=0
+			offerror
+              		return
+             		end
+          	if ((YN.lt.'0').or.(YN.gt.'9')) goto PH2
+          	PHONE(3+l,3+l)=YN
+          	PH2(l,l)=YN
+          	display(8,$SCR_POS(12,19),PHOUT)
+		offerror
+         	end
+
+        for l from 1 thru 4 
+		begin
+PH3,      
+		offerror
+		display(8,$SCR_POS(12,30+l),' ')      ;number - last 4
+          	display(8,$SCR_POS(12,30+l),0)
+          	accept(7,ANS,DONE)
+
+          	onerror PH3
+          	xcall decml(ANS,val)
+          	if (val.eq.32) goto PHONE
+          	if (val.eq.13) 
+			begin
+              		accept(7,ANS,DONE)
+              		PHONE=0
+			offerror
+              		return
+             		end
+          	if ((YN.lt.'0').or.(YN.gt.'9')) goto PH3
+          	PHONE(6+l,6+l)=YN
+          	PH3(l,l)=YN
+          	display(8,$SCR_POS(12,19),PHOUT)
+		offerror
+         	end
+
+        return
+
+;*********************
+CRED,   display(8,$SCR_POS(12,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(12,5),'Credit Rating:')
+        display(8,$SCR_POS(14,8),'1) OA')
+        display(8,$SCR_POS(15,8),'2) COD')
+        display(8,$SCR_POS(16,8),'3) CWO')
+        display(8,$SCR_POS(17,8),'4) TBA')
+CR1,    
+	 offerror
+	 display(8,$SCR_POS(19,5),'Select:    ')
+        display(8,$SCR_POS(19,13))
+        reads(7,CCRED)
+
+        onerror CR1
+        CRED=CCRD
+	 offerror
+
+        return
+
+;*********************
+; Look for City, State
+DYSECT, for l from 2 thru 21 if (CYST(l,l).eq.',') goto DY1
+        CCTY=CYST
+        SSTE=
+        return
+DY1,    CCTY=CYST(1,l-1)
+        for m from l+1 thru 21 if (CYST(m,m).ne.' ') goto DY2
+        SSTE=
+        return
+DY2,    for l from 23 thru m by -1 if (CYST(l,l).ne.' ') goto DY3
+        SSTE=
+        return
+DY3,    if (l-m.ne.1) then SSTE='!!'  ;city too long
+           else SSTE=CYST(m,l)
+        return
+;*********************
+OUT,    CODE=QSC     ;accept
+        goto OUT2
+OUT1,   CODE='   '   ;return no name
+OUT2,   close 3
+        close 7
+        close 8
+        return
+DONE,   close 3
+        close 7
+        close 8
+        END

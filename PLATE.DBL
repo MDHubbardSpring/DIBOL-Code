@@ -1,0 +1,458 @@
+; START PLATE.DBL
+;
+; This program calculates the chemical requirements for plating parts.
+; It will calculate the part area and the amount of chemicals needed
+; per pan of that part to plate it.
+;
+; The data entery is performed such that the diameters and thicknesses
+; are formatted XXX.XXX.  For internal calculations, they must be handled
+; as an integer rather than a decimal.  Thus they are stored as IIIDDD, 
+; I being the integer value, and D being the decimal.  The weights must
+; be handled similarly.  For accuracy, they are stored as IIIDDDDD.  Five
+; decimal places are carried through.
+;
+; The constants are declared in a record statement below.  They contain the
+; chemical conversions between area and amount needed.  These numbers are
+; stored as there nearest integer - multiplied by ten until no decimal point
+; remains.  This leads to an inconsistant standard.  Some are carried as
+; E-4, and some as E-6.  When revising this program I did not touch the
+; calculations.  I recommend keeping consistency with what works now.
+;
+RECORD TPLATE
+        PLAT, A1
+RECORD TPART
+        PART, A1 
+RECORD LINE1
+        ,a9             
+        CLEA2A, A7
+        ,a1
+        CLEANA, A7
+        ,a6
+RECORD LINE2
+        ,a9             
+        COPP2A, A7
+        ,a1
+        COPPEA, A7
+        ,a6
+RECORD LINE3
+        ,a9               
+        PC2A, A7
+        ,a1
+        PCA, A7
+        ,a6
+RECORD LINE4
+        ,a9             
+        FL2A, A7
+        ,a1
+        FLA, A7
+        ,a6
+RECORD LINE5
+        ,a9            
+        ME2A, A7
+        ,a1
+        MEA, A7
+        ,a6
+RECORD ORD
+        ,a5 
+        ORDER, A7
+        ,A18
+RECORD NM
+        ,a5 
+        NAME, A25
+RECORD PNO
+        ,a5 
+        PRTNUM, A16
+        ,a9
+   
+
+RECORD 
+    TPLAT, D5
+    OD, D6
+    OD1, A7
+    ID, D6
+    ID1, a7
+    TH, D4
+    TH1, a7
+    WT, D8
+    WT1, a8
+    WTLB, d3    
+    WTOZ, d5
+    WTTEMP, D8
+    WD, D6
+    WD1, a7
+    PC, D9
+    PC2, D9
+    FL, D9
+    FL2, D9
+    ME, D9
+    ME2, D9  
+    CLEAN, D9
+    CLEA2, D9
+    COPPE, D9
+    COPP2, D9
+    PAREA, D9
+    AREAP, A8
+    N, D1
+    M, D1
+    PLUGA, A6
+    PCS, D7
+    PCSA, A7
+    PANS, D2
+    ANS, A1
+    PANSA, A2
+    dip, a1
+    IN, a7
+    OUT, d6
+    OUT1, d3
+    OUT2, d3
+    xx,d3
+RECORD CONSTANTS
+    CLE, D4, 5032   
+    COP, D4, 5032  
+    PCZ, D3, 511  
+    FLASZ, D3, 384  
+    METAZ, D4, 1815  
+    PCC, D3, 625  
+    FLASC, D3, 886  
+    METAC, D4, 2363  
+    AREA, D5, 14400
+    DEN, D3, 288
+    PI, D5, 31416
+;**************************
+;  Main program
+;**************************
+PROC
+        open(8,O,'TT:')
+        open(7,I,'TT:')
+        xcall flags (1000,1)
+BEG,    clear CLEA2A
+	clear COPP2A
+ 	clear PC2A
+	clear FL2A
+	clear ME2A
+        clear ORD
+        clear NM
+        clear PNO
+        display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+	display(8,13,"    Plating calculation program")
+	writes(8," ")
+        call CNAM
+        display(8,$SCR_POS(4,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(5,20),'  Plating Calculations')
+        display(8,$SCR_POS(6,5),' Please select one of the following plating codes')
+	display(8,$SCR_POS(7,5),' using number in front of desired code.:')    
+        display(8,$SCR_POS(8,8),'1.  C1.5 = Cadmium .00015"      5.  Z1.5 = Zinc .00015"')
+        display(8,$SCR_POS(9,8),'2.  C2.0 = Cadmium .0002"       6.  Z2.0 = Zinc .0002"')
+        display(8,$SCR_POS(10,8),'3.  C3.5 = Cadmium .00035"      7.  Z3.5 = Zinc .00035"')
+        display(8,$SCR_POS(11,8),'4.  C5.0 = Cadmium .0005"       8.  Z5.0 = Zinc .0005"')
+B1,     display(8,$SCR_POS(13,5),' Plating (ENTER to exit):       ')
+        display(8,$SCR_POS(13,30))
+        reads(7,TPLATE)
+        if (PLAT.eq.'    ') goto DONE
+	xx=PLAT
+	if(xx.gt.4)goto B1a            
+	display(8,$SCR_pos(15,5),' Cadmium is no longer used !')
+        goto B1     
+B1a,    using PLAT select
+          ('1','5'), TPLAT=00015
+          ('2','6'), TPLAT=00020
+          ('3','7'), TPLAT=00035
+          ('4','8'), TPLAT=00050
+          (), begin
+                display(8,$SCR_POS(14,5),'Use only one of the above code.')
+                goto B1
+              end
+        endusing
+B2,     display(8,$SCR_POS(14,1), $SCR_CLR(eol)) 
+        display(8,$SCR_POS(14,5),'OK? (Y or N) ')
+        READS(7,ANS)
+        if (ANS.eq.'N') goto BEG
+        if (ANS.ne.'Y') goto B2
+B3,     display(8,$SCR_POS(14,1), $SCR_CLR(eol))        
+        display(8,$SCR_POS(14,5),' Is chromate or dichromate dip required (Y or N): ')
+        reads(7,dip)
+        if ((dip.ne.'Y').and.(dip.ne.'N')) goto B3
+        display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(4,5),'  Select one of these part types using number in front of type desired:')
+        display(8,$SCR_POS(6,8),' 1.  PLUG = Hubbard plugs, Cupped plugs or discs')
+        display(8,$SCR_POS(7,8),' 2.  WASH = All washers and pierced plugs')
+        display(8,$SCR_POS(8,8)," 3.  WIRE = IHP'S, HPC'S, Springs, all parts from round wire")
+        display(8,$SCR_POS(9,8),' 4.  FLAT = Miscellaneous and unusual flat shaped parts')
+B4,     display(8,$SCR_POS(11,5),' Part type (ENTER to exit):        ')
+        display(8,$SCR_POS(11,32))
+        reads(7,TPART)
+        if (PART.eq.'    ') goto DONE
+        display(8,$SCR_POS(13,1))
+        using PART select
+          ('1'), call HPLUG
+          ('2'), call HWASH
+          ('3'), call HWIRE
+          ('4'), call HFLAT
+          (), begin
+                display(8,$SCR_POS(13,1),' Use only a part type listed.  No others will be accepted.')
+                goto B4
+              end
+        endusing
+        PLUGA=PAREA, 'ZZZ.XXX'
+        DISPLAY(8,13,10,'     Part area is: ', PLUGA)
+PANS,   DISPLAY(8,13,10,10,'     Enter number of pans: ')
+        READS(7,PANSA)
+        on error PNERR
+        PANS=PANSA
+        goto INGRED
+PNERR,  display(8,10,13,13,'     Use number only.')
+        goto PANS
+INGRED, PAREA=PAREA*1000
+        CLEAN=((CLE*PAREA)/PANS)/10000
+        CLEAN=CLEAN#3
+        IF(CLEAN.LE.1) CLEAN=1
+        CLEANA=CLEAN, 'ZZZZZZZZZZZZZ'     
+        COPPE=((CLE*PAREA)/PANS)/10000
+        COPPE=COPPE#3
+        IF(COPPE.LE.1) COPPE=1
+        COPPEA=COPPE, 'ZZZZZZZZZZZ'
+        using PLAT select
+            ('1','2','3','4'), GOTO PCCAD
+        endusing
+        FL=((FLASZ*PAREA)/PANS)/10000
+        PC=((PCZ*PAREA)/PANS)/10000  
+        FL=FL#3
+        IF(FL.LE.1) FL=1
+        if(dip.eq.'Y') then ME=((METAZ*PAREA*(TPLAT+5))/PANS)/100000 
+           else ME=((METAZ*PAREA*TPLAT)/PANS)/100000 
+        ME=ME#3
+        IF(ME.LE.1) ME=1
+        PC=PC#3
+        IF(PC.LE.1) PC=1
+        FLA=FL, 'ZZZZZZZ' 
+        PCA= PC, 'ZZZZZZZ' 
+        MEA=ME, 'ZZZZZZZ' 
+        GOTO P2 
+
+PCCAD,  PC=((PCC*PAREA)/PANS)/10000
+        PC=PC#3
+        IF(PC.LE.1) PC=1
+        FL=((FLASC*PAREA)/PANS)/10000
+        ME=((METAC*PAREA*TPLAT)/PANS)/100000
+        FL=FL#3
+        IF(FL.LE.1) FL=1
+        ME=ME#3
+        IF(ME.LE.1) ME=1
+        PCA=PC, 'ZZZZZZZ'
+        FLA=FL, 'ZZZZZZZ'
+        MEA=ME, 'ZZZZZZZ'
+P2,     IF(PANS.le.1) GOTO POUT
+        PANS2, CLEA2=CLEAN*2
+        CLEA2A=CLEA2, 'ZZZZZZZ'
+        COPP2=COPPE*2
+        COPP2A=COPP2, 'ZZZZZZZ'
+        PC2=PC*2
+        PC2A=PC2, 'ZZZZZZZ'
+        FL2=FL*2
+        FL2A=FL2, 'ZZZZZZZ'
+        ME2=ME*2
+        ME2A=ME2, 'ZZZZZZZ'
+POUT,   display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+        IF (PANS.GE.2) THEN display(8,$SCR_POS(2,19),'2 PAN     1 PANS')
+            else display(8,$SCR_POS(2,29),'1 PAN')
+        display(8,$SCR_POS(4,5),'Cleaner:')
+        display(8,$SCR_POS(4,16),CLEA2A)
+        display(8,$SCR_POS(4,26),CLEANA)
+        display(8,$SCR_POS(6,5),'Copper: ')
+        display(8,$SCR_POS(6,16),COPP2A)
+        display(8,$SCR_POS(6,26),COPPEA)
+        display(8,$SCR_POS(8,5),'PC-DB-20:')
+        display(8,$SCR_POS(8,16),PC2A)  
+        display(8,$SCR_POS(8,26),PCA)       
+        display(8,$SCR_POS(10,5),'Flash:')     
+        display(8,$SCR_POS(10,16),FL2A)  
+        display(8,$SCR_POS(10,26),FLA)       
+        display(8,$SCR_POS(12,5),'Metal:')     
+        display(8,$SCR_POS(12,16),ME2A)  
+        display(8,$SCR_POS(12,26),MEA)       
+        display(8,$SCR_POS(15,5),'     Part area is: ')       
+        writes(8,PLUGA)
+        display(8,$SCR_POS(17,5),'     Press ENTER to continue.')
+        reads(7,ANS)
+        GOTO DONE
+;**************************
+HPLUG,  clear PAREA
+        call ODIN
+        call PCSIN
+        call THCKIN
+        call WGHTIN
+        PAREA=(20000*WT)/(DEN*TH)+(PCS*PI*TH*OD/10000000)
+        PAREA=(PAREA*1000)/144000
+        PAREA=PAREA#2
+        RETURN
+;**************************
+HWASH,  clear PAREA
+        call ODIN
+        call IDIN
+        call PCSIN
+        call THCKIN
+        call WGHTIN
+        PAREA=(20000*WT)/(DEN*TH)+((PCS*PI*TH)*(OD+ID)/10000000)
+        PAREA=(PAREA*1000)/144000
+        PAREA=PAREA#2
+        RETURN
+;**************************
+HFLAT,  clear PAREA
+        call THCKIN
+        call WGHTIN
+        PAREA=((200*WT)/(DEN*TH))*105
+        PAREA=(PAREA*100)/14400
+        PAREA=PAREA#2
+        RETURN
+;**************************
+HWIRE,  clear PAREA
+        call WDIN
+        call PCSIN
+        call WGHTIN
+        PAREA=(40000*WT)/(DEN*WD)+(PCS*(PI*WD*WD)/2)/10000000
+        PAREA=(PAREA*10)/1440  
+        PAREA=PAREA#2
+        RETURN
+;**************************
+ODIN,   clear OD
+        display(8,13,10,'     Enter OD: ')
+        READS(7,OD1)
+        IN=OD1
+        CALL VALUE
+        if (OUT.eq.0) goto ODIN
+        OD=OUT
+        return
+;**************************
+PCSIN,  DISPLAY(8,13,10,'     Enter number of pieces: ')
+        READS(7,PCSA)
+        on error PERR
+        PCS=PCSA
+        return
+PERR,   display(8,13,10,10,'     Use up to a seven digit number only.')
+        goto PCSIN
+;**************************
+THCKIN, clear TH
+        DISPLAY(8,13,10,'     Enter thickness of material: ')
+        READS(7,TH1)
+        IN=TH1
+        CALL VALUE
+        if (OUT.eq.0) goto THCKIN
+        TH=OUT
+        return
+;**************************
+WGHTIN, DISPLAY(8,13,10,'     Enter total weight: ')
+        READS(7,WT1)
+        CALL WAIT
+        if (WT.eq.0) goto WGHTIN
+        return
+;**************************
+IDIN,   CLEAR ID
+        display(8,13,10,'     Enter ID: ')
+        READS(7,ID1)
+        IN=ID1
+        CALL VALUE
+        if (OUT.eq.0) goto IDIN
+        ID=OUT
+        return
+;**************************
+WDIN,   CLEAR WD
+        display(8,13,10,'     Enter wire diameter: ')
+        READS(7,WD1)
+        IN=WD1
+        CALL VALUE
+        if (OUT.eq.0) goto WDIN
+        WD=OUT
+        return
+;**************************
+VALUE,  CLEAR OUT
+        on error VERR
+        OUT1=0
+        OUT2=0
+        for N from 1 thru 3 if (IN(N,N).eq.'.') then goto V1
+            else if (IN(N,N).eq.' ') then goto V2
+                     else OUT1(N,N)=IN(N,N)
+V1,     for M from 3 thru N by -1 OUT1=OUT1/10
+        for M from (N+1) thru (N+3) OUT2(M-N,M-N) = IN(M,M)
+        OUT(1,3)=OUT1
+        OUT(4,6)=OUT2
+        RETURN        
+V2,     for M from 3 thru N by -1 OUT1=OUT1/10
+        OUT=OUT1*1000
+        return
+VERR,   OUT=0
+        display(8,13,10,'     Please enter number as XXX.XXX')
+        display(8,13,10,'     You must include a decimal point.')
+        RETURN
+;**************************
+WAIT,   on error WTERR
+        WTLB=0
+        WTOZ=0
+        for N from 1 thru 3 if (WT1(N,N).eq.'-') then goto W1
+            else if (WT1(N,N).eq.' ') then goto W2
+                     else WTLB(N,N)=WT1(N,N)
+W1,     for M from 3 thru N by -1 WTLB=WTLB/10
+        if (WT1(N+2,N+2).eq.' ') then WTOZ=WT1(N+1,N+1)
+            else WTOZ=WT1(N+1,N+2)
+        WTTEMP=(WTOZ*100000)
+        WTOZ=(WTTEMP/16)
+        WT(1,3)=WTLB
+        WT(4,8)=WTOZ
+        RETURN
+W2,     for M from 3 thru N by -1 WTLB=WTLB/10
+        WT=0
+        WT(1,3)=WTLB
+        return
+WTERR,  WT=0
+        display(8,13,10,10,'Use ##-oz. format only.  Ex. 2-1 for 2 lb, 1 oz.')
+        RETURN
+;**************************
+CNAM,	display(8,$SCR_POS(1,1),'     ENTER ORDER NUMBER: ')
+        READS(7,ORDER)
+        display(8,$SCR_POS(2,1),'     ENTER CUSTOMER NAME: ')
+        READS(7,NAME)
+        display(8,$SCR_POS(3,1),'     ENTER PART NUMBER: ')
+        READS(7,PRTNUM)
+        RETURN
+DONE,   display(8,$SCR_POS(19,1),'     Do you wish to print on paper? (Y or N): ')  
+        READS(7, ANS)
+        ;IF(ANS.EQ.'Y')CALL PRO
+	if(ans.ne.'Y')goto xx
+	display(8,$scr_pos(21,1),'     Sorry - print on paper not available')
+xx,     display(8,$SCR_POS(23,1), '     Do you wish to compute another? (Y or N): ')
+	READS(7, ANS)
+	IF (ANS.EQ.'Y') GOTO BEG
+        IF(ANS.NE.'Y')GOTO STOP
+PRO,    OPEN(6,o,'PRNTPLATE')  
+        write(6,ORD,1)
+        write(6,NM,4)
+        write(6,PNO,8)    
+        write(6,PLUGA,11)
+        ;IF (PANS.GE.2) THEN write(6,'              2 PAN     1 PANS',12)
+            ;else write(6,'              1 PAN         ',12)
+        write(6,LINE1,13) 
+        write(6,LINE2,17)    
+        write(6,LINE3,21)  
+        write(6,LINE4,25)   
+        write(6,LINE5,28)   
+        using PLAT select
+            ('1'), write(6,'CAD 1.5                      ',34)
+            ('2'), write(6,'CAD 2.0                      ',34)
+            ('3'), write(6,'CAD 3.5                      ',34)
+            ('4'), write(6,'CAD 5.0                      ',34)
+            ('5'), write(6,'ZINC 1.5                     ',34)
+            ('6'), write(6,'ZINC 2.0                     ',34)
+            ('7'), write(6,'ZINC 3.5                     ',34)
+            ('8'), write(6,'ZINC 5.0                     ',34)
+        endusing
+        ;write(6,  'Part area is: ',7)       
+        display(8,$SCR_POS(21,1),'     Press ENTER to continue. ')   
+        reads(7,ANS)
+        close 6
+        return
+STOP,	writes(8," ")
+	writes(8,"  press Return or Enter when done")
+	reads(7,ANS)
+        CLOSE 7
+        CLOSE 8
+	XCALL FLAGS(1000000,1)
+        END

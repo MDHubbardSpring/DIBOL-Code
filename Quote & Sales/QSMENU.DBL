@@ -1,0 +1,153 @@
+; START QSMENU
+;
+; This is the master program and menu for the quote and sales system.  This
+; works as master to EDITQS, NMATCH, and PXREF subroutines.  These routines
+; handle all of the mechanics of quote and sales.  This program governs data
+; passed between them and their execusion order.
+;
+;     ADDR1    - passes formatted address between programs.  Reminds user who
+;                he is working with.
+;     CODE     - passes three letter code used in place of company name to
+;                identify quotes and sales.
+; 
+;  Notes:  Feb. 2000, the date field was increased to 8 digits to accomodate
+;          year 2000 problems in EDITQS and PXREF
+;  After compiling each program separately, link each of the subroutine with
+;  the following command:  dblink -l NMATCH.ELB NMATCH.DBO
+;                          dblink -l PXREF.ELB PXREF.DBO
+;			   dblink -l EDITQS.ELB EDITQS.DBO
+;			   dblink QSMENU NMATCH PXREF EDITQS
+;                      ***********************************************
+;                        OR:  dblink -l SUBQS.ELB NMATCH.DBO PXREF.DBO EDITQS.DBO
+;                             dblink -o QSMENU QSMENU SUBQS.ELB
+;
+;		       ***********************************************
+;			    Linking at Hubbard Spring Co:
+; 			    for Windows 10 on the server
+;
+;			   dblink -l DBLQSEXE:SUBQS.ELB NMATCH.DBO PXREF.DBO EDITQS.DBO
+;			   dblink -o DBLQSEXE:QSMENU QSMENU DBLQSEXE:SUBQS.ELB
+;
+;
+;			    Note the logical DBLQSEXE is located in the Control Panel
+;			    (Advanced System) \\hubbardserver\server02\dblapps\exec\ 
+;			    for each company computer.
+;				Variable Name:  DBLQSEXE
+;				Variable Value:   \\hubbardserveserver02\dblapps\exec\
+;
+;			To load this program onto the company server use the Command Prompt app as follows
+;			    E:	  (this changes over to the thumb or flash drive)
+;			    E>copy QSMENU.dbr \\hubbardserver\server02\dblapps\exec\*.*
+;			    E>copy SUBQS.ELB \\hubbardserver\seerver02\dblapps\exec\*.*
+;
+;
+
+COMMON ADDR1
+        AD1, a79
+        AD2, a79
+        AD3, a79
+        AD4, a79
+COMMON QSCODE
+        CODE, a3
+RECORD MOV
+        MV, a1
+RECORD
+        S, 5a32
+        SMAX, d1
+        SEL, d1
+        val, d3
+        lin, d1
+;********************
+;   Main Program
+;********************
+PROC
+MENU,   open(8,o,'TT:')
+        open(7,i,'TT:')
+	xcall flags (1000,1)
+        S(1)='  Post Quotes and Sales'
+        S(2)='  View Quotes and Sales'
+        S(3)='  Customer Phone Book'
+        S(4)='  Part Number Cross Reference'
+        S(5)='  Quit'
+        SMAX=5
+
+        display(8,$SCR_POS(1,1), $SCR_CLR(eos))
+        display(8,$SCR_POS(2,23),'Quote and Sales')
+        display(8,$SCR_POS(3,24),'Task Selection')
+        display(8,$SCR_POS(8,5),'Do you want to:')
+        for lin from 1 thru SMAX display(8,$SCR_POS(8+(2*lin),8),S(lin))
+        display(8,$SCR_POS(20,5),'Arrows to move, ENTER to select.') 
+        SEL=1
+        call LIGHT
+
+ACCPT,  
+	 display(8,$SCR_POS(20,37))
+
+	 accept(7,val,DONE)
+	 if(val.eq.0)accept(7,val,DONE)
+        display(8,$SCR_POS(20,37), $SCR_CLR(eol))
+
+        using val select			
+	  (72), goto UP				
+	  (80), goto DOWN
+	endusing
+
+        if (val.ne.13) goto ACCPT	; check CR
+
+        accept(7,MOV,DONE)	; line feed
+
+        using SEL select
+          (1), goto BOTH
+          (2), goto BOTH
+          (3), goto PHBOOK
+          (4), goto CROSS
+          (5), goto DONE
+        endusing
+
+        goto DONE
+
+UP,     
+	 display(8,$SCR_POS(8+(SEL*2),8),S(SEL))
+        if (SEL.gt.1) 
+		then SEL=SEL-1
+           	else SEL=SMAX
+        call LIGHT
+        goto ACCPT
+DOWN,   
+	 display(8,$SCR_POS(8+(SEL*2),8),S(SEL))
+        if (SEL.lt.SMAX) 
+		then incr SEL
+           	else SEL=1
+        call LIGHT
+        goto ACCPT
+LIGHT,  
+	 display(8,$SCR_ATT(reverse))  ;screen(1,1,3)
+        display(8,$SCR_POS(8+(SEL*2),8),S(SEL))
+        display(8,$SCR_ATT(clear))  ;screen(1,1,4)
+        return
+
+BOTH,   call CLOSE
+BO1,    xcall NMATCH
+        if(CODE.eq.'   ') goto MENU
+        xcall EDITQS
+        if(CODE.eq.'   ') goto MENU
+        goto BO1
+
+PHBOOK, call CLOSE
+PHB1,   xcall NMATCH
+        if(CODE.eq.'   ') goto MENU
+        goto PHB1
+
+CROSS,  call CLOSE
+        xcall NMATCH
+        if(CODE.eq.'   ') goto MENU
+        xcall PXREF
+        goto MENU
+
+CLOSE,  close 7
+        close 8
+        return
+
+DONE,   close 7
+        close 8
+        END
